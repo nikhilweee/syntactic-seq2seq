@@ -1,26 +1,35 @@
 from __future__ import division
 
+import argparse
+import math
+import os
+
 import onmt
 import onmt.Markdown
 import torch
-import argparse
-import math
 
 parser = argparse.ArgumentParser(description='translate.py')
 onmt.Markdown.add_md_help_argument(parser)
 
+src = 'data/split-unique/src-test.unk.txt.unique.split'
+# tgt = os.path.join(base_dir, 'tgt-test.unk.excl.txt')
+output = 'data/unk-500/pred-test.unk.txt.unique.split'
+tgt = None
+
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
-parser.add_argument('-src',   required=True,
+parser.add_argument('-src', required=False,
+                    default=src,
                     help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-tgt',
+                    default=tgt,
                     help='True target sequence (optional)')
-parser.add_argument('-output', default='pred.txt',
+parser.add_argument('-output', default=output,
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
 parser.add_argument('-beam_size',  type=int, default=5,
                     help='Beam size')
-parser.add_argument('-batch_size', type=int, default=30,
+parser.add_argument('-batch_size', type=int, default=64,
                     help='Batch size')
 parser.add_argument('-max_sent_length', type=int, default=100,
                     help='Maximum sentence length.')
@@ -34,7 +43,7 @@ parser.add_argument('-replace_unk', action="store_true",
 # parser.add_argument('-phrase_table',
 #                     help="""Path to source-target dictionary to replace UNK
 #                     tokens. See README.md for the format of this file.""")
-parser.add_argument('-verbose', action="store_true",
+parser.add_argument('-verbose', action="store_true", default=False,
                     help='Print scores and predictions for each sentence')
 parser.add_argument('-dump_beam', type=str, default="",
                     help='File to dump beam information to.')
@@ -43,7 +52,7 @@ parser.add_argument('-n_best', type=int, default=1,
                     help="""If verbose is set, will output the n_best
                     decoded sentences""")
 
-parser.add_argument('-gpu', type=int, default=-1,
+parser.add_argument('-gpu', type=int, default=0,
                     help="Device to run on")
 
 
@@ -67,7 +76,7 @@ def main():
 
     translator = onmt.Translator(opt)
 
-    outF = open(opt.output, 'w')
+    outF = open(opt.output, 'w', encoding='utf-8')
 
     predScoreTotal, predWordsTotal, goldScoreTotal, goldWordsTotal = 0, 0, 0, 0
 
@@ -75,13 +84,13 @@ def main():
 
     count = 0
 
-    tgtF = open(opt.tgt) if opt.tgt else None
+    tgtF = open(opt.tgt, encoding='utf-8') if opt.tgt else None
 
     if opt.dump_beam != "":
         import json
         translator.initBeamAccum()
 
-    for line in addone(open(opt.src)):
+    for line in addone(open(opt.src, encoding='utf-8')):
         if line is not None:
             srcTokens = line.split()
             srcBatch += [srcTokens]
@@ -95,7 +104,7 @@ def main():
             # at the end of file, check last batch
             if len(srcBatch) == 0:
                 break
-
+        print(line)
         predBatch, predScore, goldScore = translator.translate(srcBatch,
                                                                tgtBatch)
         predScoreTotal += sum(score[0] for score in predScore)
@@ -142,7 +151,7 @@ def main():
         tgtF.close()
 
     if opt.dump_beam:
-        json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
+        json.dump(translator.beam_accum, open(opt.dump_beam, 'w', encoding='utf-8'))
 
 
 if __name__ == "__main__":

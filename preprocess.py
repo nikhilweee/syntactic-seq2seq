@@ -1,42 +1,57 @@
+import os
 import onmt
 import onmt.Markdown
-
 import argparse
 import torch
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.Markdown.add_md_help_argument(parser)
 
+base_dir = 'data/unk-500-lemma'
+
+train_src = os.path.join(base_dir, 'src-train.unk.lemma.500.txt')
+train_tgt = os.path.join(base_dir, 'tgt-train.unk.lemma.500.txt')
+valid_src = os.path.join(base_dir, 'src-dev.unk.lemma.500.txt')
+valid_tgt = os.path.join(base_dir, 'tgt-dev.unk.lemma.500.txt')
+save_data = os.path.join(base_dir, 'preprocessed.unk.lemma.500.low')
+src_vocab_size = 500
+tgt_vocab_size = 500
+
 # **Preprocess Options**
 
-parser.add_argument('-config',    help="Read options from this file")
+parser.add_argument('-config', help="Read options from this file")
 
-parser.add_argument('-train_src', required=True,
+parser.add_argument('-train_src', required=False,
+                    default=train_src,
                     help="Path to the training source data")
-parser.add_argument('-train_tgt', required=True,
+parser.add_argument('-train_tgt', required=False,
+                    default=train_tgt,
                     help="Path to the training target data")
-parser.add_argument('-valid_src', required=True,
+parser.add_argument('-valid_src', required=False,
+                    default=valid_src,
                     help="Path to the validation source data")
-parser.add_argument('-valid_tgt', required=True,
+parser.add_argument('-valid_tgt', required=False,
+                    default=valid_tgt,
                     help="Path to the validation target data")
 
-parser.add_argument('-save_data', required=True,
+parser.add_argument('-save_data', required=False,
+                    default=save_data,
                     help="Output file for the prepared data")
 
-parser.add_argument('-src_vocab_size', type=int, default=50000,
+parser.add_argument('-src_vocab_size', type=int, default=src_vocab_size,
                     help="Size of the source vocabulary")
-parser.add_argument('-tgt_vocab_size', type=int, default=50000,
+parser.add_argument('-tgt_vocab_size', type=int, default=tgt_vocab_size,
                     help="Size of the target vocabulary")
 parser.add_argument('-src_vocab',
                     help="Path to an existing source vocabulary")
 parser.add_argument('-tgt_vocab',
                     help="Path to an existing target vocabulary")
 
-parser.add_argument('-src_seq_length', type=int, default=50,
+parser.add_argument('-src_seq_length', type=int, default=100,
                     help="Maximum source sequence length")
 parser.add_argument('-src_seq_length_trunc', type=int, default=0,
                     help="Truncate source sequence length.")
-parser.add_argument('-tgt_seq_length', type=int, default=50,
+parser.add_argument('-tgt_seq_length', type=int, default=100,
                     help="Maximum target sequence length to keep.")
 parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
                     help="Truncate target sequence length.")
@@ -46,7 +61,8 @@ parser.add_argument('-shuffle',    type=int, default=1,
 parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
 
-parser.add_argument('-lower', action='store_true', help='lowercase data')
+parser.add_argument('-lower', action='store_true', help='lowercase data',
+                    default=True)
 
 parser.add_argument('-report_every', type=int, default=100000,
                     help="Report status every this many sentences")
@@ -61,7 +77,7 @@ def makeVocabulary(filename, size):
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
-    with open(filename) as f:
+    with open(filename, encoding='utf-8') as f:
         for sent in f.readlines():
             for word in sent.split():
                 vocab.add(word)
@@ -106,8 +122,8 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts):
     count, ignored = 0, 0
 
     print('Processing %s & %s ...' % (srcFile, tgtFile))
-    srcF = open(srcFile)
-    tgtF = open(tgtFile)
+    srcF = open(srcFile, encoding='utf-8')
+    tgtF = open(tgtFile, encoding='utf-8')
 
     while True:
         sline = srcF.readline()

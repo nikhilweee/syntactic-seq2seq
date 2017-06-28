@@ -9,15 +9,39 @@ from torch import cuda
 from torch.autograd import Variable
 import math
 import time
+import subprocess
+import os
+import sys
+import re
+import utils
+import pickle
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.Markdown.add_md_help_argument(parser)
 
 # Data options
+# Path to *.low.train.pt
+base_dir = 'data/unk-600-lemma'
+data = os.path.join(base_dir, 'preprocessed.unk.lemma.low.train.pt')
+save_model = os.path.join(base_dir, 'models/model')
 
-parser.add_argument('-data', required=True,
+test = True
+# Used for decoding and delemmatization
+src_dev = 'data/unk-600-lemma/src-dev.unq.txt'
+src_dev_lemma = 'data/unk-600-lemma/src-dev.lemma.unq.txt'
+src_dev_lemma_unk = 'data/unk-600-lemma/src-dev.unk.lemma.unq.txt'
+pred_dev_lemma_unk = 'data/unk-600-lemma/pred-dev.unk.lemma.unq.txt'
+pred_dev_lemma = 'data/unk-600-lemma/pred-dev.lemma.unq.txt'
+pred_dev = 'data/unk-600-lemma/pred-dev.unq.txt'
+
+# test_src = os.path.join(base_dir, 'src-dev.unk.lemma.txt')
+# test_tgt = os.path.join(base_dir, 'tgt-dev.unk.lemma.txt')
+# test_pred = os.path.join(base_dir, 'pred-dev.unk.lemma.txt')
+
+parser.add_argument('-data', required=False,
+                    default=data,
                     help='Path to the *-train.pt file from preprocess.py')
-parser.add_argument('-save_model', default='model',
+parser.add_argument('-save_model', default=save_model,
                     help="""Model filename (the model will be saved as
                     <save_model>_epochN_PPL.pt where PPL is the
                     validation perplexity""")
@@ -42,7 +66,7 @@ parser.add_argument('-input_feed', type=int, default=1,
                     embeddings) to the decoder.""")
 # parser.add_argument('-residual',   action="store_true",
 #                     help="Add residual connections between RNN layers.")
-parser.add_argument('-brnn', action='store_true',
+parser.add_argument('-brnn', action='store_true', default=True,
                     help='Use a bidirectional encoder')
 parser.add_argument('-brnn_merge', default='concat',
                     help="""Merge action for the bidirectional hidden states:
@@ -56,7 +80,7 @@ parser.add_argument('-max_generator_batches', type=int, default=32,
                     help="""Maximum batches of words in a sequence to run
                     the generator on in parallel. Higher is faster, but uses
                     more memory.""")
-parser.add_argument('-epochs', type=int, default=13,
+parser.add_argument('-epochs', type=int, default=50,
                     help='Number of training epochs')
 parser.add_argument('-start_epoch', type=int, default=1,
                     help='The epoch from which to start')
@@ -84,7 +108,7 @@ parser.add_argument('-learning_rate', type=float, default=1.0,
                     used, then this is the global learning rate. Recommended
                     settings: sgd = 1, adagrad = 0.1,
                     adadelta = 1, adam = 0.001""")
-parser.add_argument('-learning_rate_decay', type=float, default=0.5,
+parser.add_argument('-learning_rate_decay', type=float, default=0.8,
                     help="""If update_learning_rate, decay learning rate by
                     this much if (i) perplexity does not decrease on the
                     validation set or (ii) epoch has gone past
@@ -105,15 +129,51 @@ parser.add_argument('-pre_word_vecs_dec',
                     See README for specific formatting instructions.""")
 
 # GPU
-parser.add_argument('-gpus', default=[], nargs='+', type=int,
+parser.add_argument('-gpus', default=[0], nargs='+', type=int,
                     help="Use CUDA on the listed devices.")
 
 parser.add_argument('-log_interval', type=int, default=50,
                     help="Print stats at this interval.")
 
+# Evaluate
+parser.add_argument('-test', default=test, action="store_true",
+                    help="""Evaluate on test set after every epoch.""")
+parser.add_argument('-test_src', default=src_dev_lemma_unk,
+                    help='Source sequence to decode (one line per sequence)')
+parser.add_argument('-test_tgt', default=None,
+                    help='True target sequence (optional)')
+parser.add_argument('-test_pred', default=pred_dev_lemma_unk,
+                    help="""Path to output the predictions (each line will
+                    be the decoded sequence""")
+parser.add_argument('-early_stop_epochs',  type=int, default=5,
+                    help='Stop after these many epochs if the BLEU score doesn\'t improve.')
+parser.add_argument('-beam_size',  type=int, default=5,
+                    help='Beam size')
+# parser.add_argument('-batch_size', type=int, default=30,
+#                     help='Batch size')
+parser.add_argument('-max_sent_length', type=int, default=100,
+                    help='Maximum sentence length.')
+parser.add_argument('-replace_unk', action="store_true",
+                    help="""Replace the generated UNK tokens with the source
+                    token that had highest attention weight. If phrase_table
+                    is provided, it will lookup the identified source token and
+                    give the corresponding target token. If it is not provided
+                    (or the identified source token does not exist in the
+                    table) then it will copy the source token""")
+parser.add_argument('-verbose', action="store_true", default=False,
+                    help='Print scores and predictions for each sentence')
+parser.add_argument('-dump_beam', type=str, default="",
+                    help='File to dump beam information to.')
+parser.add_argument('-n_best', type=int, default=1,
+                    help="""If verbose is set, will output the n_best
+                    decoded sentences""")
+
 opt = parser.parse_args()
 
 print(opt)
+# Save Config
+with open(os.path.join(base_dir, 'opt.txt'), 'w') as f:
+    f.write(str(opt))
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
@@ -188,6 +248,8 @@ def trainModel(model, trainData, validData, dataset, optim):
 
     start_time = time.time()
 
+    bleu4_scores = []
+
     def trainEpoch(epoch):
 
         if opt.extra_shuffle and epoch > opt.curriculum:
@@ -227,7 +289,7 @@ def trainModel(model, trainData, validData, dataset, optim):
             total_num_correct += num_correct
             total_words += num_words
             if i % opt.log_interval == -1 % opt.log_interval:
-                print(("Epoch %2d, %5d/%5d; acc: %6.2f; ppl: %6.2f;" +
+                print(("Epoch %2d, %5d/%5d; acc: %6.2f; ppl: %6.2f; " +
                        "%3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed") %
                       (epoch, i+1, len(trainData),
                        report_num_correct / report_tgt_words * 100,
@@ -244,6 +306,7 @@ def trainModel(model, trainData, validData, dataset, optim):
 
     for epoch in range(opt.start_epoch, opt.epochs + 1):
         print('')
+        print('Learning rate: %g' % optim.lr)
 
         #  (1) train for one epoch on the training set
         train_loss, train_acc = trainEpoch(epoch)
@@ -276,14 +339,131 @@ def trainModel(model, trainData, validData, dataset, optim):
             'epoch': epoch,
             'optim': optim
         }
-        torch.save(checkpoint,
-                   '%s_acc_%.2f_ppl_%.2f_e%d.pt'
-                   % (opt.save_model, 100*valid_acc, valid_ppl, epoch))
+
+        model_file_name = '{}_temp.pt'.format(opt.save_model)
+        torch.save(checkpoint, model_file_name)
+
+        if opt.test:
+            test(model_file_name)
+            # decode
+            utils.decode(src_dev_lemma, src_dev_lemma_unk, pred_dev_lemma_unk, pred_dev_lemma)
+            # delemmatize
+            vocab = pickle.load(open('data/split/dev/vocab.p', 'rb'))
+            utils.delemmatize(pred_dev_lemma, pred_dev, vocab)
+
+            cmd = 'perl multi-bleu.perl {} < {}'.format('data/split/dev/tgt-dev.unq.txt.split', pred_dev)
+            bleu = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8')
+            print(bleu)
+            bleu4 = re.findall('\d\.\d{2}', bleu)[0]
+            bleu4_scores.append(bleu4)
+
+            # Save best model
+            if bleu4 > max(bleu4_scores):
+                model_file_name = '%s_e%d_acc_%.2f_ppl_%.2f.pt' % \
+                                  (opt.save_model, epoch, 100*valid_acc, valid_ppl)
+                print('Saving model to {}'.format(model_file_name))
+                torch.save(checkpoint, model_file_name)
+
+            # Early stopping
+            if len(bleu4_scores) - bleu4_scores.index(max(bleu4_scores)) > opt.early_stop_epochs:
+                print("BLEU score didn't improve since {} epochs".format(opt.early_stop_epochs))
+                print("Best BLEU is {} on epoch {}".format(max(bleu4_scores), bleu4_scores.index(max(bleu4_scores)) + 1))
+                print(" Stopping ...")
+                sys.exit()
+
+
+def test(model_file_name):
+    opt.cuda = True
+    opt.model = model_file_name
+    translator = onmt.Translator(opt)
+    outF = open(opt.test_pred, 'w', encoding='utf-8')
+    predScoreTotal, predWordsTotal, goldScoreTotal, goldWordsTotal = 0, 0, 0, 0
+    srcBatch, tgtBatch = [], []
+
+    count = 0
+
+    tgtF = open(opt.test_tgt, encoding='utf-8') if opt.test_tgt else None
+
+    if opt.dump_beam != "":
+        import json
+        translator.initBeamAccum()
+
+    def addone(f):
+        for line in f:
+            yield line
+        yield None
+
+    for line in addone(open(opt.test_src, encoding='utf-8')):
+        if line is not None:
+            srcTokens = line.split()
+            srcBatch += [srcTokens]
+            if tgtF:
+                tgtTokens = tgtF.readline().split()
+                tgtBatch += [tgtTokens]
+
+            if len(srcBatch) < opt.batch_size:
+                continue
+        else:
+            # at the end of file, check last batch
+            if len(srcBatch) == 0:
+                break
+
+        predBatch, predScore, goldScore = translator.translate(srcBatch,
+                                                               tgtBatch)
+        predScoreTotal += sum(score[0] for score in predScore)
+        predWordsTotal += sum(len(x[0]) for x in predBatch)
+        if tgtF is not None:
+            goldScoreTotal += sum(goldScore)
+            goldWordsTotal += sum(len(x) for x in tgtBatch)
+
+        for b in range(len(predBatch)):
+            count += 1
+            outF.write(" ".join(predBatch[b][0]) + '\n')
+            outF.flush()
+
+            if opt.verbose:
+                srcSent = ' '.join(srcBatch[b])
+                if translator.tgt_dict.lower:
+                    srcSent = srcSent.lower()
+                print('SENT %d: %s' % (count, srcSent))
+                print('PRED %d: %s' % (count, " ".join(predBatch[b][0])))
+                print("PRED SCORE: %.4f" % predScore[b][0])
+
+                if tgtF is not None:
+                    tgtSent = ' '.join(tgtBatch[b])
+                    if translator.tgt_dict.lower:
+                        tgtSent = tgtSent.lower()
+                    print('GOLD %d: %s ' % (count, tgtSent))
+                    print("GOLD SCORE: %.4f" % goldScore[b])
+
+                if opt.n_best > 1:
+                    print('\nBEST HYP:')
+                    for n in range(opt.n_best):
+                        print("[%.4f] %s" % (predScore[b][n],
+                                             " ".join(predBatch[b][n])))
+
+                print('')
+
+        srcBatch, tgtBatch = [], []
+
+    def reportScore(name, scoreTotal, wordsTotal):
+        print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
+            name, scoreTotal / wordsTotal,
+            name, math.exp(-scoreTotal/wordsTotal)))
+
+    reportScore('PRED', predScoreTotal, predWordsTotal)
+    if tgtF:
+        reportScore('GOLD', goldScoreTotal, goldWordsTotal)
+
+    if tgtF:
+        tgtF.close()
+
+    if opt.dump_beam:
+        json.dump(translator.beam_accum, open(opt.dump_beam, 'w', encoding='utf-8'))
 
 
 def main():
     print("Loading data from '%s'" % opt.data)
-
     dataset = torch.load(opt.data)
 
     dict_checkpoint = (opt.train_from if opt.train_from
@@ -292,7 +472,6 @@ def main():
         print('Loading dicts from checkpoint at %s' % dict_checkpoint)
         checkpoint = torch.load(dict_checkpoint)
         dataset['dicts'] = checkpoint['dicts']
-
     trainData = onmt.Dataset(dataset['train']['src'],
                              dataset['train']['tgt'], opt.batch_size, opt.gpus)
     validData = onmt.Dataset(dataset['valid']['src'],
