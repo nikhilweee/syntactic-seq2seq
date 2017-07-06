@@ -15,6 +15,7 @@ import sys
 import re
 import utils
 import pickle
+import logging
 from qgevalcap.eval import eval as evaluate
 
 parser = argparse.ArgumentParser(description='train.py')
@@ -22,23 +23,38 @@ onmt.Markdown.add_md_help_argument(parser)
 
 # Data options
 # Path to *.low.train.pt
-base_dir = 'data/unk-500-lemma'
-data = os.path.join(base_dir, 'preprocessed.unk.lemma.500.low.train.pt')
-save_model = os.path.join(base_dir, 'models/model')
+base_dir = 'data/unk-5000-wordvec'
+data = os.path.join(base_dir, 'preprocessed.unk.lemma.5000.low.train.pt')
+save_model = os.path.join(base_dir, 'models/model_emb_128')
 
 test = True
 # Used for decoding and delemmatization
-src_dev = os.path.join(base_dir, 'src-dev.txt')
-src_dev_lemma = os.path.join(base_dir, 'src-dev.lemma.txt')
-src_dev_lemma_unk = os.path.join(base_dir, 'src-dev.unk.lemma.500.txt')
-pred_dev_lemma_unk = os.path.join(base_dir, 'pred-dev.unk.lemma.500.txt')
-pred_dev_lemma = os.path.join(base_dir, 'pred-dev.lemma.txt')
-pred_dev = os.path.join(base_dir, 'pred-dev.txt')
-tgt_dev = os.path.join(base_dir, 'tgt-dev.txt')
+src_dev = os.path.join('data/raw', 'src-dev.txt')
+src_dev_lemma = os.path.join('data/lemmatized', 'src-dev.lemma.txt')
+src_dev_lemma_unk = os.path.join(base_dir, 'src-dev.unk.lemma.5000.txt')
+pred_dev_lemma_unk = os.path.join(base_dir, 'pred-dev.unk.lemma.5000.128.txt')
+pred_dev_lemma = os.path.join(base_dir, 'pred-dev.lemma.128.txt')
+pred_dev = os.path.join(base_dir, 'pred-dev.128.txt')
+tgt_dev = os.path.join('data/raw', 'tgt-dev.txt')
+glove_6B_100d = 'data/glove/glove.pt'
 
 # test_src = os.path.join(base_dir, 'src-dev.unk.lemma.txt')
 # test_tgt = os.path.join(base_dir, 'tgt-dev.unk.lemma.txt')
 # test_pred = os.path.join(base_dir, 'pred-dev.unk.lemma.txt')
+formatter = logging.Formatter(
+    '%(asctime)s %(levelname)-8s %(message)s', '%Y-%m-%d %H:%M:%S')
+logfile = logging.FileHandler(
+    filename=os.path.join(base_dir, 'train.log'), mode='a')
+logfile.setFormatter(formatter)
+console = logging.StreamHandler()
+console.setFormatter(formatter)
+
+logger = logging.getLogger('')
+logger.setLevel(logging.DEBUG)
+logger.addHandler(console)
+logger.addHandler(logfile)
+
+logging.info('This works!')
 
 parser.add_argument('-data', required=False, default=data,
                     help='Path to the *-train.pt file from preprocess.py')
@@ -59,7 +75,7 @@ parser.add_argument('-layers', type=int, default=2,
                     help='Number of layers in the LSTM encoder/decoder')
 parser.add_argument('-rnn_size', type=int, default=500,
                     help='Size of LSTM hidden states')
-parser.add_argument('-word_vec_size', type=int, default=500,
+parser.add_argument('-word_vec_size', type=int, default=128,
                     help='Word embedding sizes')
 parser.add_argument('-input_feed', type=int, default=1,
                     help="""Feed the context vector at each time step as
@@ -77,7 +93,7 @@ parser.add_argument('-brnn_merge', default='concat',
 
 parser.add_argument('-batch_size', type=int, default=64,
                     help='Maximum batch size')
-parser.add_argument('-max_generator_batches', type=int, default=32,
+parser.add_argument('-max_generator_batches', type=int, default=64,
                     help="""Maximum batches of words in a sequence to run
                     the generator on in parallel. Higher is faster, but uses
                     more memory.""")
@@ -120,11 +136,11 @@ parser.add_argument('-start_decay_at', type=int, default=8,
 
 # pretrained word vectors
 
-parser.add_argument('-pre_word_vecs_enc',
+parser.add_argument('-pre_word_vecs_enc', default=glove_6B_100d,
                     help="""If a valid path is specified, then this will load
                     pretrained word embeddings on the encoder side.
                     See README for specific formatting instructions.""")
-parser.add_argument('-pre_word_vecs_dec',
+parser.add_argument('-pre_word_vecs_dec', default=glove_6B_100d,
                     help="""If a valid path is specified, then this will load
                     pretrained word embeddings on the decoder side.
                     See README for specific formatting instructions.""")
@@ -146,7 +162,7 @@ parser.add_argument('-test_tgt', default=None,
 parser.add_argument('-test_pred', default=pred_dev_lemma_unk,
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
-parser.add_argument('-early_stop_epochs',  type=int, default=5,
+parser.add_argument('-early_stop_epochs',  type=int, default=15,
                     help='Stop after these many epochs if the BLEU score doesn\'t improve.')
 parser.add_argument('-beam_size',  type=int, default=5,
                     help='Beam size')
@@ -171,7 +187,7 @@ parser.add_argument('-n_best', type=int, default=1,
 
 opt = parser.parse_args()
 
-print(opt)
+logging.info(opt)
 # Save Config
 with open(os.path.join(base_dir, 'opt.txt'), 'w') as f:
     f.write(str(opt))
@@ -231,7 +247,7 @@ def eval(model, criterion, data):
         # exclude <s> from targets
         targets = batch[1][1:]
         loss, _, num_correct = memoryEfficientLoss(
-                outputs, targets, model.generator, criterion, eval=True)
+            outputs, targets, model.generator, criterion, eval=True)
         total_loss += loss
         total_num_correct += num_correct
         total_words += targets.data.ne(onmt.Constants.PAD).sum()
@@ -241,7 +257,7 @@ def eval(model, criterion, data):
 
 
 def trainModel(model, trainData, validData, dataset, optim):
-    print(model)
+    logging.info(model)
     model.train()
 
     # Define criterion of each GPU.
@@ -274,7 +290,7 @@ def trainModel(model, trainData, validData, dataset, optim):
             # Exclude <s> from targets.
             targets = batch[1][1:]
             loss, gradOutput, num_correct = memoryEfficientLoss(
-                    outputs, targets, model.generator, criterion)
+                outputs, targets, model.generator, criterion)
 
             outputs.backward(gradOutput)
 
@@ -290,14 +306,14 @@ def trainModel(model, trainData, validData, dataset, optim):
             total_num_correct += num_correct
             total_words += num_words
             if i % opt.log_interval == -1 % opt.log_interval:
-                print(("Epoch %2d, %5d/%5d; acc: %6.2f; ppl: %6.2f; " +
+                logging.info(("Epoch %2d, %5d/%5d; acc: %6.2f; ppl: %6.2f; " +
                        "%3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed") %
-                      (epoch, i+1, len(trainData),
+                      (epoch, i + 1, len(trainData),
                        report_num_correct / report_tgt_words * 100,
                        math.exp(report_loss / report_tgt_words),
-                       report_src_words/(time.time()-start),
-                       report_tgt_words/(time.time()-start),
-                       time.time()-start_time))
+                       report_src_words / (time.time() - start),
+                       report_tgt_words / (time.time() - start),
+                       time.time() - start_time))
 
                 report_loss, report_tgt_words = 0, 0
                 report_src_words, report_num_correct = 0, 0
@@ -306,20 +322,20 @@ def trainModel(model, trainData, validData, dataset, optim):
         return total_loss / total_words, total_num_correct / total_words
 
     for epoch in range(opt.start_epoch, opt.epochs + 1):
-        print('')
-        print('Learning rate: %g' % optim.lr)
+        logging.info('')
+        logging.info('Learning rate: %g' % optim.lr)
 
         #  (1) train for one epoch on the training set
         train_loss, train_acc = trainEpoch(epoch)
         train_ppl = math.exp(min(train_loss, 100))
-        print('Train perplexity: %g' % train_ppl)
-        print('Train accuracy: %g' % (train_acc*100))
+        logging.info('Train perplexity: %g' % train_ppl)
+        logging.info('Train accuracy: %g' % (train_acc * 100))
 
         #  (2) evaluate on the validation set
         valid_loss, valid_acc = eval(model, criterion, validData)
         valid_ppl = math.exp(min(valid_loss, 100))
-        print('Validation perplexity: %g' % valid_ppl)
-        print('Validation accuracy: %g' % (valid_acc*100))
+        logging.info('Validation perplexity: %g' % valid_ppl)
+        logging.info('Validation accuracy: %g' % (valid_acc * 100))
 
         #  (3) update the learning rate
         optim.updateLearningRate(valid_ppl, epoch)
@@ -347,9 +363,10 @@ def trainModel(model, trainData, validData, dataset, optim):
         if opt.test:
             test(model_file_name)
             # decode
-            utils.decode(src_dev_lemma, src_dev_lemma_unk, pred_dev_lemma_unk, pred_dev_lemma)
+            utils.decode(src_dev_lemma, src_dev_lemma_unk,
+                         pred_dev_lemma_unk, pred_dev_lemma)
             # delemmatize
-            vocab = pickle.load(open('data/vocab.p', 'rb'))
+            vocab = pickle.load(open('data/lemmatized/vocab.p', 'rb'))
             utils.delemmatize(pred_dev_lemma, pred_dev, vocab)
 
             # cmd = 'perl multi-bleu.perl {} < {}'.format('data/split/dev/tgt-dev.unq.txt.split', pred_dev)
@@ -357,21 +374,24 @@ def trainModel(model, trainData, validData, dataset, optim):
             # bleu4 = re.findall('\d{1,2}\.\d{2}', bleu)
             # bleu4 = float(bleu4[0])
             scores = evaluate(pred_dev, src_dev, tgt_dev)
+            logging.info(scores)
             bleu4 = scores[3]
             bleu4_scores.append(bleu4)
 
             # Save best model
             if bleu4 == max(bleu4_scores):
-                model_file_name = '%s_e%d_bleu4_%.2f_ppl_%.2f.pt' % \
+                model_file_name = '%s_e%d_bleu4_%.5f_ppl_%.2f.pt' % \
                                   (opt.save_model, epoch, bleu4, valid_ppl)
-                print('Saving model to {}'.format(model_file_name))
+                logging.info('Saving model to {}'.format(model_file_name))
                 torch.save(checkpoint, model_file_name)
 
             # Early stopping
             if len(bleu4_scores) - bleu4_scores.index(max(bleu4_scores)) > opt.early_stop_epochs:
-                print("BLEU score didn't improve since {} epochs".format(opt.early_stop_epochs))
-                print("Best BLEU is {} on epoch {}".format(max(bleu4_scores), bleu4_scores.index(max(bleu4_scores)) + 1))
-                print("Stopping ...")
+                logging.info("BLEU score didn't improve since {} epochs".format(
+                    opt.early_stop_epochs))
+                logging.info("Best BLEU is {} on epoch {}".format(
+                    max(bleu4_scores), bleu4_scores.index(max(bleu4_scores)) + opt.start_epoch))
+                logging.info("Stopping ...")
                 sys.exit()
 
 
@@ -450,9 +470,9 @@ def test(model_file_name):
         srcBatch, tgtBatch = [], []
 
     def reportScore(name, scoreTotal, wordsTotal):
-        print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
+        logging.info("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
             name, scoreTotal / wordsTotal,
-            name, math.exp(-scoreTotal/wordsTotal)))
+            name, math.exp(-scoreTotal / wordsTotal)))
 
     reportScore('PRED', predScoreTotal, predWordsTotal)
     if tgtF:
@@ -466,13 +486,13 @@ def test(model_file_name):
 
 
 def main():
-    print("Loading data from '%s'" % opt.data)
+    logging.info("Loading data from '%s'" % opt.data)
     dataset = torch.load(opt.data)
 
     dict_checkpoint = (opt.train_from if opt.train_from
                        else opt.train_from_state_dict)
     if dict_checkpoint:
-        print('Loading dicts from checkpoint at %s' % dict_checkpoint)
+        logging.info('Loading dicts from checkpoint at %s' % dict_checkpoint)
         checkpoint = torch.load(dict_checkpoint)
         dataset['dicts'] = checkpoint['dicts']
     trainData = onmt.Dataset(dataset['train']['src'],
@@ -482,13 +502,13 @@ def main():
                              volatile=True)
 
     dicts = dataset['dicts']
-    print(' * vocabulary size. source = %d; target = %d' %
+    logging.info(' * vocabulary size. source = %d; target = %d' %
           (dicts['src'].size(), dicts['tgt'].size()))
-    print(' * number of training sentences. %d' %
+    logging.info(' * number of training sentences. %d' %
           len(dataset['train']['src']))
-    print(' * maximum batch size. %d' % opt.batch_size)
+    logging.info(' * maximum batch size. %d' % opt.batch_size)
 
-    print('Building model...')
+    logging.info('Building model...')
 
     encoder = onmt.Models.Encoder(opt, dicts['src'])
     decoder = onmt.Models.Decoder(opt, dicts['tgt'])
@@ -500,7 +520,7 @@ def main():
     model = onmt.Models.NMTModel(encoder, decoder)
 
     if opt.train_from:
-        print('Loading model from checkpoint at %s' % opt.train_from)
+        logging.info('Loading model from checkpoint at %s' % opt.train_from)
         chk_model = checkpoint['model']
         generator_state_dict = chk_model.generator.state_dict()
         model_state_dict = {k: v for k, v in chk_model.state_dict().items()
@@ -510,7 +530,7 @@ def main():
         opt.start_epoch = checkpoint['epoch'] + 1
 
     if opt.train_from_state_dict:
-        print('Loading model from checkpoint at %s'
+        logging.info('Loading model from checkpoint at %s'
               % opt.train_from_state_dict)
         model.load_state_dict(checkpoint['model'])
         generator.load_state_dict(checkpoint['generator'])
@@ -542,9 +562,9 @@ def main():
             start_decay_at=opt.start_decay_at
         )
     else:
-        print('Loading optimizer from checkpoint:')
+        logging.info('Loading optimizer from checkpoint:')
         optim = checkpoint['optim']
-        print(optim)
+        logging.info(optim)
 
     optim.set_parameters(model.parameters())
 
@@ -553,7 +573,7 @@ def main():
             checkpoint['optim'].optimizer.state_dict())
 
     nParams = sum([p.nelement() for p in model.parameters()])
-    print('* number of parameters: %d' % nParams)
+    logging.info('* number of parameters: %d' % nParams)
 
     trainModel(model, trainData, validData, dataset, optim)
 

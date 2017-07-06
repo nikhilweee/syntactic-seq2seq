@@ -9,19 +9,33 @@ import onmt
 import onmt.Markdown
 import torch
 import pickle
+import logging
 
 parser = argparse.ArgumentParser(description='translate_unk_lemma.py')
 onmt.Markdown.add_md_help_argument(parser)
 
-base_dir = 'data/unk-500-lemma'
+base_dir = 'data/unk-5000-wordvec'
 
 # Used for decoding and delemmatization
-src_test = os.path.join(base_dir, 'src-test.txt')
-src_test_lemma = os.path.join(base_dir, 'src-test.lemma.txt')
-src_test_lemma_unk = os.path.join(base_dir, 'src-test.unk.lemma.500.txt')
-pred_test_lemma_unk = os.path.join(base_dir, 'pred-test.unk.lemma.500.txt')
-pred_test_lemma = os.path.join(base_dir, 'pred-test.lemma.txt')
-pred_test = os.path.join(base_dir, 'pred-test.txt')
+src_test = os.path.join('data/raw', 'src-test.txt')
+src_test_lemma = os.path.join('data/lemmatized', 'src-test.lemma.txt')
+src_test_lemma_unk = os.path.join(base_dir, 'src-test.unk.lemma.5000.txt')
+pred_test_lemma_unk = os.path.join(base_dir, 'pred-test.unk.lemma.5000.128.txt')
+pred_test_lemma = os.path.join(base_dir, 'pred-test.lemma.128.txt')
+pred_test = os.path.join(base_dir, 'pred-test.128.txt')
+
+formatter = logging.Formatter(
+    '%(asctime)s %(levelname)-8s %(message)s', '%Y-%m-%d %H:%M:%S')
+logfile = logging.FileHandler(
+    filename=os.path.join(base_dir, 'translate.log'), mode='a')
+logfile.setFormatter(formatter)
+console = logging.StreamHandler()
+console.setFormatter(formatter)
+
+logger = logging.getLogger('')
+logger.setLevel(logging.DEBUG)
+logger.addHandler(console)
+logger.addHandler(logfile)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
@@ -31,7 +45,7 @@ parser.add_argument('-src', required=False,
 parser.add_argument('-output', default=pred_test_lemma_unk,
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
-parser.add_argument('-beam_size',  type=int, default=5,
+parser.add_argument('-beam_size',  type=int, default=3,
                     help='Beam size')
 parser.add_argument('-batch_size', type=int, default=64,
                     help='Batch size')
@@ -65,6 +79,7 @@ def addone(f):
 
 
 def translate():
+    logging.info('Translating ...')
     opt = parser.parse_args()
     opt.cuda = opt.gpu > -1
     if opt.cuda:
@@ -81,6 +96,7 @@ def translate():
 
     for line in addone(codecs.open(opt.src, encoding='utf-8')):
         if line is not None:
+            count += 1
             srcTokens = line.split()
             srcBatch += [srcTokens]
 
@@ -101,15 +117,20 @@ def translate():
             outF.write(" ".join(predBatch[b][0]) + '\n')
             outF.flush()
 
+        if count % 1024 == 0:
+            logging.info('Translated {} sentences'.format(count))
         srcBatch, tgtBatch = [], []
 
 def main():
     translate()
     # decode
+    logging.info('Decoding ...')
     utils.decode(src_test_lemma, src_test_lemma_unk, pred_test_lemma_unk, pred_test_lemma)
     # delemmatize
-    vocab = pickle.load(open('data/vocab.p', 'rb'))
+    vocab = pickle.load(open('data/lemmatized/vocab.p', 'rb'))
+    logging.info('Delemmatizing ...')
     utils.delemmatize(pred_test_lemma, pred_test, vocab)
+    logging.info('Done. Saved predictions to {}'.format(pred_test))
 
 
 if __name__ == "__main__":

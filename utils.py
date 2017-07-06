@@ -1,11 +1,17 @@
-from __future__ import print_function
+from __future__ import print_function, unicode_literals
 import time
 import nltk
 import operator
 import pickle
 import argparse
 import codecs
-from spacy.en.language_data import STOP_WORDS
+import logging
+
+# use spaCy stopwords
+# STOP_WORDS = spacy.en.language_data.STOP_WORDS
+# use NLTK stopwords
+from nltk.corpus import stopwords
+STOP_WORDS = stopwords.words('english')
 
 # The POS Tag - operator mapping for every word.
 OPERATORS = {
@@ -34,7 +40,7 @@ lemmatizer = nltk.stem.WordNetLemmatizer()
 def lemmatize(src_delemmatized, tgt_lemmatized, vocab):
     all_tags = {}
     with codecs.open(src_delemmatized, encoding='utf-8') as src, codecs.open(tgt_lemmatized, 'w', encoding='utf-8') as tgt:
-        print('Tagging {} ...'.format(src_delemmatized))
+        logging.info('Tagging {} ...'.format(src_delemmatized))
         for line in src:
             tokens = line.split()
             tags = nltk.pos_tag(tokens)
@@ -49,7 +55,7 @@ def lemmatize(src_delemmatized, tgt_lemmatized, vocab):
                     word = word_lemma + ' ' + OPERATORS[tag]
                 words.append(word)
             tgt.write(' '.join(words) + '\n')
-        print('Tagging Complete.')
+        logging.info('Tagging Complete.')
         all_tags_sorted = sorted(
             all_tags.items(), key=operator.itemgetter(1), reverse=True)
     return vocab, all_tags_sorted
@@ -71,8 +77,9 @@ def delemmatize(src_lemmatized, tgt_delemmatized, vocab):
             tgt.write(' '.join(tgt_words) + '\n')
 
 def make_vocab(src_train, tgt_train):
+    logging.info('Making vocab ...')
     words = {}
-    with open(src_train) as src, open(tgt_train) as tgt:
+    with codecs.open(src_train, encoding='utf-8') as src, codecs.open(tgt_train, encoding='utf-8') as tgt:
         for src_line, tgt_line in zip(src, tgt):
             src_words = set(src_line.split())
             tgt_words = set(tgt_line.split())
@@ -90,7 +97,14 @@ def make_vocab(src_train, tgt_train):
         words.items(), key=operator.itemgetter(1), reverse=True)
     sorted_words_list = [x[0] for x in sorted_words]
 
+    # import spacy
+    # nlp = spacy.load('en')
+    # doc = nlp(' '.join(sorted_words_list))
+    # ents = [ent.text for ent in doc.ents]
+    # vocab = list(STOP_WORDS) + [word.text for word in doc if word.text not in ents]
+
     vocab = list(STOP_WORDS) + sorted_words_list
+    logging.info('Making vocab complete.')
     return vocab[:opt.vocab_size], sorted_words_list
 
 def encode(src_original, src_encoded, tgt_original, tgt_encoded, vocab):
@@ -101,10 +115,11 @@ def encode(src_original, src_encoded, tgt_original, tgt_encoded, vocab):
         tgt_original = src_original
         tgt_encoded = '/dev/null'
 
-    with open(src_original) as src_full, \
-        open(tgt_original) as tgt_full, \
-        open(src_encoded, 'w') as src_unk, \
-        open(tgt_encoded, 'w') as tgt_unk:
+    with codecs.open(src_original, encoding='utf-8') as src_full, \
+        codecs.open(tgt_original, encoding='utf-8') as tgt_full, \
+        codecs.open(src_encoded, 'w', encoding='utf-8') as src_unk, \
+        codecs.open(tgt_encoded, 'w', encoding='utf-8') as tgt_unk:
+        count = 0
         for src_line, tgt_line in zip(src_full, tgt_full):
             src_words = src_line.split()
             tgt_words = tgt_line.split()
@@ -116,16 +131,57 @@ def encode(src_original, src_encoded, tgt_original, tgt_encoded, vocab):
             # unique list of source and target unknowns
             unks = src_unks + tgt_unks
             for idx, unk in enumerate(unks):
+                # Tag different forms separately
                 src_words = ['unk{}'.format(
                     idx + 1) if word == unk else word for word in src_words]
                 tgt_words = ['unk{}'.format(
                     idx + 1) if word == unk else word for word in tgt_words]
             src_unk.write(' '.join(src_words) + '\n')
             tgt_unk.write(' '.join(tgt_words) + '\n')
+            count += 1
+            if count % 1000 == 0:
+                logging.info('Wrote {} lines.'.format(count))
+
+def encode_tagged(src_original, src_encoded, tgt_original, tgt_encoded, vocab):
+    logging.info('Encoding ...')
+    hist = {}
+    unique_hist = {}
+
+    if not tgt_original:
+        tgt_original = src_original
+        tgt_encoded = '/dev/null'
+
+    with codecs.open(src_original, encoding='utf-8') as src_full, \
+        codecs.open(tgt_original, encoding='utf-8') as tgt_full, \
+        codecs.open(src_encoded, 'w', encoding='utf-8') as src_unk, \
+        codecs.open(tgt_encoded, 'w', encoding='utf-8') as tgt_unk:
+        for idx, (src_line, tgt_line) in enumerate(zip(src_full, tgt_full)):
+            if idx % 1000 == 0:
+                logging.info('Processed {} lines'.format(idx))
+            src_words = src_line.split()
+            tgt_words = tgt_line.split()
+            src_unks, tgt_unks = [], []
+            src_unks = [
+                word for word in src_words if word not in vocab + src_unks]
+            tgt_unks = [
+                word for word in tgt_words if word not in vocab + src_unks + tgt_unks]
+            # unique list of source and target unknowns
+            unks = src_unks + tgt_unks
+            tags = nltk.pos_tag(unks)
+            for idx, (unk, tag) in enumerate(tags):
+                # Tag different forms separately.
+                # Assuming OPERATORS are already a part of vocab.
+                src_words = ['#{}{}'.format(tag.lower(),
+                    idx + 1) if word == unk else word for word in src_words]
+                tgt_words = ['#{}{}'.format(tag.lower(),
+                    idx + 1) if word == unk else word for word in tgt_words]
+            src_unk.write(' '.join(src_words) + '\n')
+            tgt_unk.write(' '.join(tgt_words) + '\n')
+    logging.info('Encoding complete.')
 
 def decode(src_original, src_unknown, pred_unknown, pred_decoded):
-    with open(src_original) as src, open(src_unknown) as src_unk, \
-        open(pred_unknown) as pred_unk, open(pred_decoded, 'w') as pred:
+    with codecs.open(src_original, encoding='utf-8') as src, codecs.open(src_unknown, encoding='utf-8') as src_unk, \
+        codecs.open(pred_unknown, encoding='utf-8') as pred_unk, codecs.open(pred_decoded, 'w', encoding='utf-8') as pred:
 
         for src_line, src_unk_line, pred_unk_line in zip(src, src_unk, pred_unk):
             mapping = {}
@@ -139,24 +195,40 @@ def decode(src_original, src_unknown, pred_unknown, pred_decoded):
                 pred_line.append(word)
             pred.write(' '.join(pred_line) + '\n')
 
+def decode_tagged(src_original, src_unknown, pred_unknown, pred_decoded):
+    with codecs.open(src_original, encoding='utf-8') as src, codecs.open(src_unknown, encoding='utf-8') as src_unk, \
+        codecs.open(pred_unknown, encoding='utf-8') as pred_unk, codecs.open(pred_decoded, 'w', encoding='utf-8') as pred:
+
+        for src_line, src_unk_line, pred_unk_line in zip(src, src_unk, pred_unk):
+            mapping = {}
+            for src_word, src_unk_word in zip(src_line.split(), src_unk_line.split()):
+                if src_unk_word.startswith('#'):
+                    mapping[src_unk_word] = src_word
+            pred_line = []
+            for word in pred_unk_line.split():
+                if word.startswith('#'):
+                    word = mapping[word] if word in mapping else word
+                pred_line.append(word)
+            pred.write(' '.join(pred_line) + '\n')
+
 def main():
 
     start_time = time.time()
 
     if opt.lemmatize or opt.delemmatize:
-        pickle_file = 'data/vocab.p'
+        pickle_file = 'data/lemmatized/vocab.p'
         try:
             vocab = pickle.load(open(pickle_file, 'rb'))
-            print('Loaded vocab from {}'.format(pickle_file))
+            logging.info('Loaded vocab from {}'.format(pickle_file))
         except IOError:
             vocab = {}
-            vocab, _ = lemmatize('data/src-train.txt', '/dev/null', vocab)
-            vocab, _ = lemmatize('data/tgt-train.txt', '/dev/null', vocab)
+            vocab, _ = lemmatize('data/raw/src-train.txt', '/dev/null', vocab)
+            vocab, _ = lemmatize('data/raw/tgt-train.txt', '/dev/null', vocab)
             pickle.dump(vocab, open(pickle_file, 'wb'))
-            print('Stored vocab in {}'.format(pickle_file))
+            logging.info('Stored vocab in {}'.format(pickle_file))
 
     if opt.lemmatize:
-        src_delemmatized = 'data/src-dev.txt'
+        src_delemmatized = 'data/raw/src-dev.txt'
         tgt_lemmatized = 'data/unk-500-lemma/src-dev.lemma.txt'
         _, _ = lemmatize(src_delemmatized, tgt_lemmatized, vocab)
 
@@ -167,17 +239,17 @@ def main():
 
     if opt.encode:
         # Remember to check vocab
-        opt.vocab_size = 500
-        src_train = 'data/unk-500-lemma/src-train.lemma.txt'
-        tgt_train = 'data/unk-500-lemma/tgt-train.lemma.txt'
+        opt.vocab_size = 5000
+        src_train = 'data/lemmatized/src-train.lemma.txt'
+        tgt_train = 'data/lemmatized/tgt-train.lemma.txt'
         vocab, _ = make_vocab(src_train, tgt_train)
-        import pudb; pudb.set_trace()
 
-        src_original = 'data/unk-500-lemma/src-dev.lemma.txt'
-        src_encoded = 'data/unk-500-lemma/src-dev.unk.lemma.500.txt'
+        src_original = 'data/lemmatized/src-dev.lemma.txt'
+        src_encoded = 'data/unk-5000-wordvec/src-dev.unk.lemma.5000.txt'
         # Leave empty strings to only encode source files.
-        tgt_original = 'data/unk-500-lemma/tgt-dev.lemma.txt'
-        tgt_encoded = 'data/unk-500-lemma/tgt-dev.unk.lemma.500.txt'
+        tgt_original = 'data/lemmatized/tgt-dev.lemma.txt'
+        tgt_encoded = 'data/unk-5000-wordvec/tgt-dev.unk.lemma.5000.txt'
+        # encode(src_original, src_encoded, tgt_original, tgt_encoded, vocab)
         encode(src_original, src_encoded, tgt_original, tgt_encoded, vocab)
 
     if opt.decode:
@@ -202,5 +274,14 @@ if __name__ == '__main__':
     parser.add_argument('-vocab_size', type=int, default=500,
                         help="Replace all except these many tokens")
     opt = parser.parse_args()
+
+    formatter = logging.Formatter(
+        '%(asctime)s %(levelname)-8s %(message)s', '%Y-%m-%d %H:%M:%S')
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+
+    logger = logging.getLogger('')
+    logger.setLevel(logging.INFO)
+    logger.addHandler(console)
 
     main()

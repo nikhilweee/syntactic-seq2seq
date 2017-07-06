@@ -1,21 +1,24 @@
+from __future__ import print_function
+
 import os
 import onmt
 import onmt.Markdown
 import argparse
 import torch
+import codecs
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.Markdown.add_md_help_argument(parser)
 
-base_dir = 'data/unk-500-lemma'
+base_dir = 'data/unk-5000-wordvec'
 
-train_src = os.path.join(base_dir, 'src-train.unk.lemma.500.txt')
-train_tgt = os.path.join(base_dir, 'tgt-train.unk.lemma.500.txt')
-valid_src = os.path.join(base_dir, 'src-dev.unk.lemma.500.txt')
-valid_tgt = os.path.join(base_dir, 'tgt-dev.unk.lemma.500.txt')
-save_data = os.path.join(base_dir, 'preprocessed.unk.lemma.500.low')
-src_vocab_size = 500
-tgt_vocab_size = 500
+train_src = os.path.join(base_dir, 'src-train.unk.lemma.5000.txt')
+train_tgt = os.path.join(base_dir, 'tgt-train.unk.lemma.5000.txt')
+valid_src = os.path.join(base_dir, 'src-dev.unk.lemma.5000.txt')
+valid_tgt = os.path.join(base_dir, 'tgt-dev.unk.lemma.5000.txt')
+save_data = os.path.join(base_dir, 'preprocessed.unk.lemma.5000.low')
+src_vocab_size = 5000
+tgt_vocab_size = 5000
 
 # **Preprocess Options**
 
@@ -77,7 +80,7 @@ def makeVocabulary(filename, size):
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
-    with open(filename, encoding='utf-8') as f:
+    with codecs.open(filename, encoding='utf-8') as f:
         for sent in f.readlines():
             for word in sent.split():
                 vocab.add(word)
@@ -122,8 +125,8 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts):
     count, ignored = 0, 0
 
     print('Processing %s & %s ...' % (srcFile, tgtFile))
-    srcF = open(srcFile, encoding='utf-8')
-    tgtF = open(tgtFile, encoding='utf-8')
+    srcF = codecs.open(srcFile, encoding='utf-8')
+    tgtF = codecs.open(tgtFile, encoding='utf-8')
 
     while True:
         sline = srcF.readline()

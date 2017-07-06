@@ -7,6 +7,7 @@ from rouge.rouge import Rouge
 from cider.cider import Cider
 from collections import defaultdict
 from argparse import ArgumentParser
+import logging
 
 import sys
 reload(sys)
@@ -34,10 +35,10 @@ class QGEvalCap:
             score, scores = scorer.compute_score(self.gts, self.res)
             if type(method) == list:
                 for sc, scs, m in zip(score, scores, method):
-                    print "%s: %0.5f"%(m, sc)
+                    logging.info("%s: %0.5f"%(m, sc))
                     output.append(sc)
             else:
-                print "%s: %0.5f"%(method, score)
+                logging.info("%s: %0.5f"%(method, score))
                 output.append(score)
         return output
 
@@ -84,7 +85,7 @@ def eval(out_file, src_file, tgt_file, isDIn = False, num_pairs = 500):
         key = pair['tokenized_sentence']
         res[key] = [pair['prediction'].encode('utf-8')]
 
-        ## gts 
+        ## gts
         gts[key].append(pair['tokenized_question'].encode('utf-8'))
 
     QGEval = QGEvalCap(gts, res)
@@ -93,11 +94,17 @@ def eval(out_file, src_file, tgt_file, isDIn = False, num_pairs = 500):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-out", "--out_file", dest="out_file", default="./output/pred.txt", help="output file to compare")
-    parser.add_argument("-src", "--src_file", dest="src_file", default="../data/processed/src-test.txt", help="src file")
-    parser.add_argument("-tgt", "--tgt_file", dest="tgt_file", default="../data/processed/tgt-test.txt", help="target file")
+    parser.add_argument("-src", "--src_file", dest="src_file", default="../data/raw/src-test.txt", help="src file")
+    parser.add_argument("-tgt", "--tgt_file", dest="tgt_file", default="../data/raw/tgt-test.txt", help="target file")
     args = parser.parse_args()
 
-    print "scores: \n"
+    formatter = logging.Formatter(
+        '%(asctime)s %(levelname)-8s %(message)s', '%Y-%m-%d %H:%M:%S')
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    logger = logging.getLogger('')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(console)
+
+    logging.info("scores: \n")
     eval(args.out_file, args.src_file, args.tgt_file)
-
-
