@@ -4,3 +4,5 @@ multi-bleu.perl
 *.pyc
 #.*
 data/
+.idea
+*.sublime-*
