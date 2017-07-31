@@ -2,11 +2,13 @@ from __future__ import division
 
 import onmt
 import onmt.Markdown
+import onmt.Models
+import onmt.modules
 import argparse
 import torch
 import torch.nn as nn
 from torch import cuda
-from torch.autograd import Variable
+# from torch.autograd import Variable
 import math
 import time
 import subprocess
@@ -77,10 +79,16 @@ parser.add_argument('-rnn_size', type=int, default=500,
                     help='Size of LSTM hidden states')
 parser.add_argument('-word_vec_size', type=int, default=128,
                     help='Word embedding sizes')
+parser.add_argument('-feature_vec_size', type=int, default=100,
+                    help='Feature vec sizes')
+
 parser.add_argument('-input_feed', type=int, default=1,
                     help="""Feed the context vector at each time step as
                     additional input (via concatenation with the word
                     embeddings) to the decoder.""")
+parser.add_argument('-rnn_type', type=str, default='LSTM',
+                    choices=['LSTM', 'GRU'],
+                    help="""The gate type to use in the RNNs""")
 # parser.add_argument('-residual',   action="store_true",
 #                     help="Add residual connections between RNN layers.")
 parser.add_argument('-brnn', action='store_true', default=True,
@@ -88,9 +96,30 @@ parser.add_argument('-brnn', action='store_true', default=True,
 parser.add_argument('-brnn_merge', default='concat',
                     help="""Merge action for the bidirectional hidden states:
                     [concat|sum]""")
+parser.add_argument('-copy_attn', action="store_true",
+                    help='Train copy attention layer.')
+parser.add_argument('-coverage_attn', action="store_true",
+                    help='Train a coverage attention layer.')
+parser.add_argument('-lambda_coverage', type=float, default=1,
+                    help='Lambda value for coverage.')
+
+parser.add_argument('-encoder_layer', type=str, default='rnn',
+                    help="""Type of encoder layer to use.
+                    Options: [rnn|mean|transformer]""")
+parser.add_argument('-decoder_layer', type=str, default='rnn',
+                    help='Type of decoder layer to use. [rnn|transformer]')
+parser.add_argument('-context_gate', type=str, default=None,
+                    choices=['source', 'target', 'both'],
+                    help="""Type of context gate to use [source|target|both].
+                    Do not select for no context gate.""")
+parser.add_argument('-attention_type', type=str, default='dotprod',
+                    choices=['dotprod', 'mlp'],
+                    help="""The attention type to use:
+                    dotprot (Luong) or MLP (Bahdanau)""")
 
 # Optimization options
-
+parser.add_argument('-encoder_type', default='text',
+                    help="Type of encoder to use. Options are [text|img].")
 parser.add_argument('-batch_size', type=int, default=64,
                     help='Maximum batch size')
 parser.add_argument('-max_generator_batches', type=int, default=64,
@@ -103,7 +132,8 @@ parser.add_argument('-start_epoch', type=int, default=1,
                     help='The epoch from which to start')
 parser.add_argument('-param_init', type=float, default=0.1,
                     help="""Parameters are initialized over uniform distribution
-                    with support (-param_init, param_init)""")
+                    with support (-param_init, param_init)
+                    Use 0 to not use initialization""")
 parser.add_argument('-optim', default='sgd',
                     help="Optimization method. [sgd|adagrad|adadelta|adam]")
 parser.add_argument('-max_grad_norm', type=float, default=5,
@@ -111,6 +141,11 @@ parser.add_argument('-max_grad_norm', type=float, default=5,
                     renormalize it to have the norm equal to max_grad_norm""")
 parser.add_argument('-dropout', type=float, default=0.3,
                     help='Dropout probability; applied between LSTM stacks.')
+parser.add_argument('-position_encoding', action='store_true',
+                    help='Use a sinusoid to mark relative words positions.')
+parser.add_argument('-share_decoder_embeddings', action='store_true',
+                    help='Share the word and softmax embeddings for decoder.')
+
 parser.add_argument('-curriculum', action="store_true",
                     help="""For this many epochs, order the minibatches based
                     on source sequence length. Sometimes setting this to 1 will
@@ -559,7 +594,8 @@ def main():
         optim = onmt.Optim(
             opt.optim, opt.learning_rate, opt.max_grad_norm,
             lr_decay=opt.learning_rate_decay,
-            start_decay_at=opt.start_decay_at
+            start_decay_at=opt.start_decay_at,
+            opt=opt
         )
     else:
         logging.info('Loading optimizer from checkpoint:')
